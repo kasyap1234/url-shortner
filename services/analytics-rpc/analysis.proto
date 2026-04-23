@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package analytics;
+
+option go_package = "./analytics";
+
+message AnalyticsRequest {
+  string url = 1;
+  string ip = 2;
+  string platform = 3;
+}
+
+message AnalyticsResponse {
+  int32 clicks = 1;
+  string url = 2;
+}
+
+service AnalysisService {
+  rpc GetAnalytics(AnalyticsRequest) returns (AnalyticsResponse);
+  rpc CreateAnalytics(AnalyticsRequest) returns (AnalyticsResponse);
+  rpc UpdateAnalytics(AnalyticsRequest) returns (AnalyticsResponse);
+  rpc DeleteAnalytics(AnalyticsRequest) returns (AnalyticsResponse);
+}

@@ -1,0 +1,24 @@
+type ShortenRequest {
+	URL string `json:"url"`
+}
+
+type ShortenResponse {
+	ShortURL string `json:"short_url"`
+}
+
+type RedirectRequest {
+	ShortURL string `json:"short_url"`
+}
+
+type RedirectResponse {
+	URL string `json:"url"`
+}
+
+service shortner-api {
+	@handler ShortenHandler
+	post /api/shorten (ShortenRequest) returns (ShortenResponse)
+
+	@handler RedirectHandler
+	get /:short_url (RedirectRequest) returns (RedirectResponse)
+}
+

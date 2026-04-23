@@ -1,0 +1,222 @@
+version: '3'
+
+vars:
+  GOCTL: goctl
+  SQLC_CMD: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+  GOOSE_CMD: go run github.com/pressly/goose/v3/cmd/goose@latest
+  SHORTNER_API_DIR: services/shortner-api
+  SHORTNER_API_SPEC: '{{.SHORTNER_API_DIR}}/shortner.api'
+  TRANSFORM_RPC_DIR: services/transform-rpc
+  TRANSFORM_PROTO: '{{.TRANSFORM_RPC_DIR}}/transform.proto'
+  TRANSFORM_SQLC: '{{.TRANSFORM_RPC_DIR}}/sqlc.yaml'
+  TRANSFORM_MIGRATIONS_DIR: '{{.TRANSFORM_RPC_DIR}}/db/migrations'
+  TRANSFORM_DB_DSN: '{{default "postgres://postgres:postgres@127.0.0.1:5432/url_shortner?sslmode=disable" .POSTGRES_DSN_TRANSFORM}}'
+  ANALYTICS_RPC_DIR: services/analytics-rpc
+  ANALYTICS_PROTO: '{{.ANALYTICS_RPC_DIR}}/analysis.proto'
+  ANALYTICS_MIGRATIONS_DIR: '{{.ANALYTICS_RPC_DIR}}/db/migrations'
+  ANALYTICS_DB_DSN: '{{default "postgres://postgres:postgres@127.0.0.1:5432/url_shortner_analytics?sslmode=disable" .POSTGRES_DSN_ANALYTICS}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - go run github.com/go-task/task/v3/cmd/task@latest --taskfile Taskfile.yml --list-all
+
+  doctor:
+    desc: Check local tools needed for this repository
+    cmds:
+      - go version
+      - '{{.GOCTL}} --version'
+      - protoc --version
+      - protoc-gen-go --version
+      - protoc-gen-go-grpc --version
+      - go run github.com/go-task/task/v3/cmd/task@latest --version
+      - sh -c 'sqlc version 2>/dev/null || echo "sqlc not installed; using {{.SQLC_CMD}} in generate:sqlc"'
+      - sh -c 'goose -version 2>/dev/null || echo "goose not installed; using {{.GOOSE_CMD}} in db:*:migrate tasks"'
+
+  fmt:
+    desc: Format all Go packages
+    cmds:
+      - go fmt ./...
+
+  tidy:
+    desc: Tidy the Go module
+    cmds:
+      - go mod tidy
+
+  test:
+    desc: Run all Go tests
+    cmds:
+      - go test ./...
+
+  generate:
+    desc: Regenerate the active codegen outputs used by this repo
+    deps:
+      - generate:api
+      - generate:transform-rpc
+      - generate:sqlc
+
+  generate:api:
+    desc: Regenerate the shortner REST gateway from shortner.api
+    preconditions:
+      - sh: command -v {{.GOCTL}} >/dev/null 2>&1
+        msg: goctl is required to regenerate the REST gateway.
+    cmds:
+      - '{{.GOCTL}} api go --api {{.SHORTNER_API_SPEC}} --dir {{.SHORTNER_API_DIR}} --style gozero'
+
+  generate:transform-rpc:
+    desc: Regenerate protobuf and go-zero RPC client/server scaffolding for transform-rpc
+    preconditions:
+      - sh: command -v {{.GOCTL}} >/dev/null 2>&1
+        msg: goctl is required to regenerate transform-rpc.
+      - sh: grep -q '^syntax = "proto3";$' {{.TRANSFORM_PROTO}}
+        msg: '{{.TRANSFORM_PROTO}} must contain `syntax = "proto3";` before goctl rpc protoc will work.'
+    cmds:
+      - '{{.GOCTL}} rpc protoc {{.TRANSFORM_PROTO}} --go_out={{.TRANSFORM_RPC_DIR}} --go-grpc_out={{.TRANSFORM_RPC_DIR}} --zrpc_out={{.TRANSFORM_RPC_DIR}} --style gozero --module url-shortner'
+
+  generate:analytics-rpc:
+    desc: Regenerate protobuf and go-zero RPC scaffolding for analytics-rpc after the proto is completed
+    preconditions:
+      - sh: command -v {{.GOCTL}} >/dev/null 2>&1
+        msg: goctl is required to regenerate analytics-rpc.
+      - sh: grep -q '^option go_package = ' {{.ANALYTICS_PROTO}}
+        msg: '{{.ANALYTICS_PROTO}} needs an `option go_package = "...";` line before Go code generation will work.'
+    cmds:
+      - '{{.GOCTL}} rpc protoc {{.ANALYTICS_PROTO}} --go_out={{.ANALYTICS_RPC_DIR}} --go-grpc_out={{.ANALYTICS_RPC_DIR}} --zrpc_out={{.ANALYTICS_RPC_DIR}} --style gozero --module url-shortner'
+
+  generate:sqlc:
+    desc: Regenerate the sqlc query layer for transform-rpc
+    cmds:
+      - '{{.SQLC_CMD}} generate -f {{.TRANSFORM_SQLC}}'
+
+  db:transform:create:
+    desc: Create a new Goose SQL migration for transform-rpc (pass NAME=my_change)
+    preconditions:
+      - sh: test -n "{{.NAME}}"
+        msg: 'NAME is required. Example: task db:transform:create NAME=add_click_count'
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.TRANSFORM_MIGRATIONS_DIR}} create {{.NAME}} sql'
+
+  db:transform:up:
+    desc: Apply all pending Goose migrations for transform-rpc
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.TRANSFORM_MIGRATIONS_DIR}} postgres "{{.TRANSFORM_DB_DSN}}" up'
+
+  db:transform:up-to:
+    desc: Migrate transform-rpc DB up to a target version (pass VERSION=YYYYMMDDHHMMSS)
+    preconditions:
+      - sh: test -n "{{.VERSION}}"
+        msg: 'VERSION is required. Example: task db:transform:up-to VERSION=20260423010101'
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.TRANSFORM_MIGRATIONS_DIR}} postgres "{{.TRANSFORM_DB_DSN}}" up-to {{.VERSION}}'
+
+  db:transform:down:
+    desc: Roll back the latest Goose migration for transform-rpc
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.TRANSFORM_MIGRATIONS_DIR}} postgres "{{.TRANSFORM_DB_DSN}}" down'
+
+  db:transform:down-to:
+    desc: Roll back transform-rpc DB down to a target version (pass VERSION=YYYYMMDDHHMMSS)
+    preconditions:
+      - sh: test -n "{{.VERSION}}"
+        msg: 'VERSION is required. Example: task db:transform:down-to VERSION=20260423010101'
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.TRANSFORM_MIGRATIONS_DIR}} postgres "{{.TRANSFORM_DB_DSN}}" down-to {{.VERSION}}'
+
+  db:transform:redo:
+    desc: Reapply the latest Goose migration for transform-rpc
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.TRANSFORM_MIGRATIONS_DIR}} postgres "{{.TRANSFORM_DB_DSN}}" redo'
+
+  db:transform:status:
+    desc: Show Goose migration status for transform-rpc
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.TRANSFORM_MIGRATIONS_DIR}} postgres "{{.TRANSFORM_DB_DSN}}" status'
+
+  db:transform:reset:
+    desc: Reset transform-rpc DB by rolling back all Goose migrations
+    preconditions:
+      - sh: test "{{.CONFIRM}}" = "yes"
+        msg: 'Set CONFIRM=yes to run destructive reset. Example: task db:transform:reset CONFIRM=yes'
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.TRANSFORM_MIGRATIONS_DIR}} postgres "{{.TRANSFORM_DB_DSN}}" reset'
+
+  db:analytics:create:
+    desc: Create a new Goose SQL migration for analytics-rpc (pass NAME=my_change)
+    preconditions:
+      - sh: test -n "{{.NAME}}"
+        msg: 'NAME is required. Example: task db:analytics:create NAME=add_session_id'
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.ANALYTICS_MIGRATIONS_DIR}} create {{.NAME}} sql'
+
+  db:analytics:up:
+    desc: Apply all pending Goose migrations for analytics-rpc
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.ANALYTICS_MIGRATIONS_DIR}} postgres "{{.ANALYTICS_DB_DSN}}" up'
+
+  db:analytics:up-to:
+    desc: Migrate analytics-rpc DB up to a target version (pass VERSION=YYYYMMDDHHMMSS)
+    preconditions:
+      - sh: test -n "{{.VERSION}}"
+        msg: 'VERSION is required. Example: task db:analytics:up-to VERSION=20260423010101'
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.ANALYTICS_MIGRATIONS_DIR}} postgres "{{.ANALYTICS_DB_DSN}}" up-to {{.VERSION}}'
+
+  db:analytics:down:
+    desc: Roll back the latest Goose migration for analytics-rpc
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.ANALYTICS_MIGRATIONS_DIR}} postgres "{{.ANALYTICS_DB_DSN}}" down'
+
+  db:analytics:down-to:
+    desc: Roll back analytics-rpc DB down to a target version (pass VERSION=YYYYMMDDHHMMSS)
+    preconditions:
+      - sh: test -n "{{.VERSION}}"
+        msg: 'VERSION is required. Example: task db:analytics:down-to VERSION=20260423010101'
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.ANALYTICS_MIGRATIONS_DIR}} postgres "{{.ANALYTICS_DB_DSN}}" down-to {{.VERSION}}'
+
+  db:analytics:redo:
+    desc: Reapply the latest Goose migration for analytics-rpc
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.ANALYTICS_MIGRATIONS_DIR}} postgres "{{.ANALYTICS_DB_DSN}}" redo'
+
+  db:analytics:status:
+    desc: Show Goose migration status for analytics-rpc
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.ANALYTICS_MIGRATIONS_DIR}} postgres "{{.ANALYTICS_DB_DSN}}" status'
+
+  db:analytics:reset:
+    desc: Reset analytics-rpc DB by rolling back all Goose migrations
+    preconditions:
+      - sh: test "{{.CONFIRM}}" = "yes"
+        msg: 'Set CONFIRM=yes to run destructive reset. Example: task db:analytics:reset CONFIRM=yes'
+    cmds:
+      - '{{.GOOSE_CMD}} -dir {{.ANALYTICS_MIGRATIONS_DIR}} postgres "{{.ANALYTICS_DB_DSN}}" reset'
+
+  db:all:up:
+    desc: Apply all pending Goose migrations for both service databases
+    deps:
+      - db:transform:up
+      - db:analytics:up
+
+  db:all:status:
+    desc: Show Goose migration status for both service databases
+    deps:
+      - db:transform:status
+      - db:analytics:status
+
+  run:shortner-api:
+    desc: Run the REST gateway locally
+    cmds:
+      - go run ./services/shortner-api -f services/shortner-api/etc/shortner-api.yaml
+
+  run:transform-rpc:
+    desc: Run the transform RPC service locally
+    cmds:
+      - go run ./services/transform-rpc -f services/transform-rpc/etc/transform.yaml
+
+  run:all:
+    desc: Print the two commands you typically run in separate terminals during development
+    cmds:
+      - echo 'go run github.com/go-task/task/v3/cmd/task@latest --taskfile Taskfile.yml run:transform-rpc'
+      - echo 'go run github.com/go-task/task/v3/cmd/task@latest --taskfile Taskfile.yml run:shortner-api'
