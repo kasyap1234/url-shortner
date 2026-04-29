@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"url-shortner/services/transform-rpc/internal/config"
-	"url-shortner/services/transform-rpc/internal/store"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sony/sonyflake"
@@ -14,20 +13,16 @@ import (
 
 type ServiceContext struct {
 	Config    config.Config
-	Redis     *redis.Redis
-	DB        *pgxpool.Pool
-	Store     *store.Queries
+	Redis     *redis.Redis 
 	Generator *sonyflake.Sonyflake
 }
 
 func NewServiceContext(c config.Config) *ServiceContext {
-	db := mustNewPostgres(c.Postgres.DSN)
-
+	
+	
 	return &ServiceContext{
 		Config:    c,
 		Redis:     redis.MustNewRedis(c.Redis),
-		DB:        db,
-		Store:     store.New(db),
 		Generator: sonyflake.NewSonyflake(sonyflake.Settings{}),
 	}
 }

@@ -15,6 +15,8 @@ type DeleteAnalyticsLogic struct {
 	logx.Logger
 }
 
+
+
 func NewDeleteAnalyticsLogic(ctx context.Context, svcCtx *svc.ServiceContext) *DeleteAnalyticsLogic {
 	return &DeleteAnalyticsLogic{
 		ctx:    ctx,
